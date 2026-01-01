@@ -9,17 +9,16 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
 # --- Configuration: Schedules Direct ---
-USER_NAME = 'username'
-PASSWORD = 'password'
+USER_NAME = 'user'
+PASSWORD = 'pass'
 
 BASE_URL = 'https://json.schedulesdirect.org/20141201'
 OUTPUT_DIR = "/mnt/user/appdata/schedulesdirect"
 OUTPUT_FILE = f"{OUTPUT_DIR}/schedulesdirect.xml"
 
 # --- Configuration: Jellyfin API ---
-# Ensure there is NO trailing slash at the end of the URL
 JELLYFIN_URL = 'http://192.168.0.8:8096'
-JELLYFIN_API_KEY = 'api key'
+JELLYFIN_API_KEY = '********'
 TRIGGER_JELLYFIN = True
 
 def lprint(text):
@@ -56,77 +55,38 @@ def format_xmltv_date(date_str):
 
 def trigger_jellyfin_refresh():
     if not TRIGGER_JELLYFIN: return
-    
-    headers = {
-        "X-Emby-Token": JELLYFIN_API_KEY,
-        "Content-Type": "application/json"
-    }
-
+    headers = {"X-Emby-Token": JELLYFIN_API_KEY, "Content-Type": "application/json"}
     try:
         lprint("Searching for Jellyfin Refresh Task ID...")
-        # Get the list of tasks to find the specific ID for this server
-        tasks_url = f"{JELLYFIN_URL}/ScheduledTasks"
-        tasks_res = requests.get(tasks_url, headers=headers, timeout=10)
-        
-        if tasks_res.status_code != 200:
-            lprint(f"Failed to get tasks list. Status: {tasks_res.status_code}")
-            return
-
+        tasks_res = requests.get(f"{JELLYFIN_URL}/ScheduledTasks", headers=headers, timeout=10)
+        if tasks_res.status_code != 200: return
         tasks = tasks_res.json()
-        # Find task by Key or Name
         task_id = next((t['Id'] for t in tasks if t.get('Key') == 'RefreshGuide' or t.get('Name') == 'Refresh Guide'), None)
-
-        if not task_id:
-            lprint("Could not find the 'Refresh Guide' task in Jellyfin.")
-            return
-
-        lprint(f"Triggering Jellyfin Task ID: {task_id}")
-        run_url = f"{JELLYFIN_URL}/ScheduledTasks/Running/{task_id}"
-        response = requests.post(run_url, headers=headers, timeout=15)
-        
-        if response.status_code in [200, 204]:
+        if task_id:
+            lprint(f"Triggering Jellyfin Task ID: {task_id}")
+            requests.post(f"{JELLYFIN_URL}/ScheduledTasks/Running/{task_id}", headers=headers, timeout=15)
             lprint("SUCCESS: Jellyfin guide refresh started.")
-        else:
-            lprint(f"Jellyfin returned status: {response.status_code}")
-
     except Exception as e:
         lprint(f"Could not connect to Jellyfin: {e}")
 
 def main():
     lprint("--- Starting Multi-Lineup EPG Download ---")
     token = get_token()
-    if not token: 
-        lprint("Could not obtain token. Exiting.")
-        return
+    if not token: return
     headers = {'token': token}
 
-    # 1. Fetch Lineups
-    lineups_res = requests.get(f"{BASE_URL}/lineups", headers=headers)
-    lineups_data = lineups_res.json()
-    
-    if 'lineups' not in lineups_data:
-        lprint(f"Error fetching lineups: {lineups_data}")
-        return
-
-    # 2. Collect Stations & Mapping Numbers
+    lineups_res = requests.get(f"{BASE_URL}/lineups", headers=headers).json()
     master_stations_map = {}
     
-    for entry in lineups_data.get('lineups', []):
+    for entry in lineups_res.get('lineups', []):
         l_id = entry['lineup']
-        lprint(f"Fetching mapping for: {l_id}")
         m_res = requests.get(f"{BASE_URL}/lineups/{l_id}", headers=headers).json()
-        
         map_lookup = {}
         for m in m_res.get('map', []):
             sid = m['stationID']
-            if 'atscMajor' in m and 'atscMinor' in m:
-                chan_val = f"{m['atscMajor']}.{m['atscMinor']}"
-            else:
-                chan_val = m.get('channel')
-            
-            if sid not in map_lookup:
-                map_lookup[sid] = []
-            map_lookup[sid].append(chan_val)
+            chan = f"{m['atscMajor']}.{m['atscMinor']}" if 'atscMajor' in m else m.get('channel')
+            if sid not in map_lookup: map_lookup[sid] = []
+            map_lookup[sid].append(chan)
         
         for s in m_res.get('stations', []):
             sid = s['stationID']
@@ -137,65 +97,40 @@ def main():
                     s_instance['display_number'] = channel_num
                     master_stations_map[unique_key] = s_instance
 
-    # 3. Get Schedules
     unique_sids = list(set(key.split('_')[0] for key in master_stations_map.keys()))
     schedules_raw = {}
-    lprint(f"Requesting schedules for {len(unique_sids)} unique stations...")
     for i in range(0, len(unique_sids), 500):
         batch = [{"stationID": sid} for sid in unique_sids[i:i+500]]
         sched_res = requests.post(f"{BASE_URL}/schedules", headers=headers, json=batch)
         if sched_res.status_code == 200:
-            for s_data in sched_res.json():
-                schedules_raw[s_data['stationID']] = s_data
+            for s_data in sched_res.json(): schedules_raw[s_data['stationID']] = s_data
 
-    # 4. Fetch Metadata
-    all_prog_ids = []
-    for s_id in schedules_raw:
-        for p in schedules_raw[s_id].get('programs', []):
-            all_prog_ids.append(p['programID'])
-    
-    all_prog_ids = list(set(all_prog_ids))
+    all_prog_ids = list(set(p['programID'] for s in schedules_raw.values() for p in s.get('programs', [])))
     programs_data = {}
     show_progress(f"Downloading Metadata for {len(all_prog_ids)} programs", duration=2)
-    
     for i in range(0, len(all_prog_ids), 5000):
-        batch = all_prog_ids[i:i+5000]
-        prog_res = requests.post(f"{BASE_URL}/programs", headers=headers, json=batch)
+        prog_res = requests.post(f"{BASE_URL}/programs", headers=headers, json=all_prog_ids[i:i+5000])
         if prog_res.status_code == 200:
-            for p in prog_res.json():
-                programs_data[p['programID']] = p
+            for p in prog_res.json(): programs_data[p['programID']] = p
 
-    # 5. Build XMLTV
     root = ET.Element("tv", {"generator-info-name": "Jellyfin-Full-Auto"})
     
     for unique_key, s_info in master_stations_map.items():
         ch = ET.SubElement(root, "channel", id=unique_key)
-        num = s_info.get('display_number', '')
-        call = s_info.get('callsign', '')
-        name = s_info.get('name', '')
-
-        # Filter ShopLC branding
+        num, call, name = s_info.get('display_number', ''), s_info.get('callsign', ''), s_info.get('name', '')
         display_label = call
-        if name and ("SHOPLC" in name.upper() or "SHOP LC" in name.upper()):
-            display_label = call
-
+        if name and ("SHOPLC" in name.upper() or "SHOP LC" in name.upper()): display_label = call
         if num:
             ET.SubElement(ch, "display-name").text = str(num)
             ET.SubElement(ch, "display-name").text = f"{num} {display_label}"
-        
         ET.SubElement(ch, "display-name").text = display_label
+        if 'logo' in s_info: ET.SubElement(ch, "icon", src=s_info['logo']['URL'])
 
-        if 'logo' in s_info: 
-            ET.SubElement(ch, "icon", src=s_info['logo']['URL'])
-
-    # Build Programmes
     for unique_key, s_info in master_stations_map.items():
         sid = s_info['stationID']
         if sid not in schedules_raw: continue
-            
         for p in schedules_raw[sid].get('programs', []):
             details = programs_data.get(p['programID'], {})
-            
             start_dt = datetime.strptime(p['airDateTime'].replace("Z","").split(".")[0], "%Y-%m-%dT%H:%M:%S")
             stop_dt = start_dt + timedelta(seconds=p.get('duration', 0))
             
@@ -206,10 +141,30 @@ def main():
             
             ET.SubElement(prog, "title").text = details.get('titles', [{}])[0].get('title120', 'No Title')
             
-            # REPEAT TAG FIX
+            if p.get('live'):
+                ET.SubElement(prog, "live")
+            
+            # Explicit NEW / PREVIOUSLY SHOWN logic
             if not p.get('new', False):
                 ET.SubElement(prog, "previously-shown")
+            else:
+                ET.SubElement(prog, "new")
 
+            # SAFER HD CHECK: Handles both dictionary and string formats
+            is_hd = False
+            v_props = p.get('videoProperties', [])
+            if isinstance(v_props, list):
+                for prop in v_props:
+                    if isinstance(prop, dict) and prop.get('quality') == 'HDTV':
+                        is_hd = True
+                    elif isinstance(prop, str) and 'HDTV' in prop:
+                        is_hd = True
+            
+            if is_hd:
+                v = ET.SubElement(prog, "video")
+                ET.SubElement(v, "quality").text = "HDTV"
+
+            # Metadata
             desc_text = ""
             if 'descriptions' in details:
                 d = details['descriptions']
@@ -223,12 +178,9 @@ def main():
                         if s_n and e_n:
                             ET.SubElement(prog, "episode-num", system="xmltv_ns").text = f"{int(s_n)-1}.{int(e_n)-1}.0/1"
 
-    # 6. Save
-    show_progress("Finalizing XML and setting permissions", duration=1)
     tree = ET.ElementTree(root)
     with open(OUTPUT_FILE, "wb") as f:
         tree.write(f, encoding='utf-8', xml_declaration=True)
-    
     os.chmod(OUTPUT_FILE, 0o666) 
     lprint(f"--- SUCCESS: Guide saved to {OUTPUT_FILE} ---")
     trigger_jellyfin_refresh()
