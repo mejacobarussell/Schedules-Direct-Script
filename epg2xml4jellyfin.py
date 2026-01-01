@@ -1,5 +1,6 @@
 #!/usr/bin/python3
-
+# If you are using unriads user scripts plugin copy all and past directly into a new script. Makesure to keep the above code.
+#
 import requests
 import hashlib
 import os
