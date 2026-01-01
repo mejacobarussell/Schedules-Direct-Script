@@ -5,7 +5,7 @@ Buy a Paramedic a coffee (or a line of code!)
 Your support helps keep me caffeinated for those 24-hour shifts and contributes to my learning journey in tech. Whether it's a 'thank you' for my service or just a shared love for clean code, I truly appreciate the support!"
 Getting the family to adopt Jellyfin and Plex instead of paying for TV has been hard for me. They want it to be easy to use and always work.
 
-<script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="yourditchdoc" data-color="#FFDD00" data-emoji="☕"  data-font="Arial" data-text="Buy a Paramedic a coffee." data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff" ></script>
+<a href="https://www.buymeacoffee.com/yourditchdoc" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/arial-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
 With JellyFin being broken when working with schedules direct I tried dockers and all sorts of stuff, but running a nextPVR docker just for guide data didnt make sense to me. I created this script over a week with what free time I had.
 
