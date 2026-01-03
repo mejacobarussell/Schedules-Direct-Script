@@ -9,115 +9,84 @@ Getting the family to adopt Jellyfin and Plex instead of paying for TV has been 
 
 <a href="https://www.buymeacoffee.com/yourditchdoc" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/arial-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
-Schedules Direct to XMLTV for Jellyfin
-A robust Python-based EPG (Electronic Program Guide) generator that fetches data from Schedules Direct and formats it specifically for Jellyfin. This script includes advanced logic to ensure that news programs and daily shows are correctly identified as "Series" to enable full DVR recording capabilities.
+Schedules Direct to XMLTV for Unraid
+A custom Python-based EPG (Electronic Program Guide) grabber designed specifically for Unraid users running Jellyfin or Emby.
 
-✨ Key Features
-Series Recording Hack: Forces the "Record Series" button in Jellyfin for shows without traditional season/episode numbers (like local news).
+This script solves the common "missing series recording" issue by correctly formatting episode numbers for daily news and regular series, while ensuring sub-channels (e.g., 4.1, 4.2) auto-map to your tuner.
 
-* Local Icon Hosting: Downloads station logos locally to reduce API calls and speed up guide loading.
-* Intelligent Repeat Logic: Cross-references original air dates to accurately flag "New" vs. "Repeat" episodes.
-* Unraid Optimized: Includes automatic recursive permission management (chmod 777 and chown nobody:users).
-* Test Mode: Option to process only one random channel to verify setup instantly.
-* Debug Mode: Detailed logging to troubleshoot API responses or file system issues.
+🚀 Key Features
+Jellyfin/Emby Optimized: Forces SxxExx and xmltv_ns tags even for Daily News to enable the "Record Series" button.
 
-🚀 Setup Instructions
-1. Prerequisites
+Automatic Channel Mapping: Cross-references ATSC Major/Minor numbers so channels like 47.1 map automatically to your antenna tuner.
 
-A Schedules Direct active subscription.
+Unraid Permission Friendly: Automatically sets file ownership to nobody:users and permissions to 777 for seamless access by Docker containers.
 
-Python 3.x installed.
+Intelligent "New" Flagging: Specifically identifies News programs to ensure they are marked as "New," preventing the DVR from skipping them as "Repeats."
 
-The requests library (pip install requests).
+🛠️ Installation on Unraid
+1. Requirements
 
-2. Configuration
+Ensure you have the User Scripts plugin installed from the Unraid Community Applications store.
 
-Open the script and update the configuration section at the top:
-USER_NAME / PASSWORD: Your Schedules Direct credentials.
-OUTPUT_DIR: The path where you want the XML and logos stored (e.g., /mnt/user/appdata/schedulesdirect).
-JELLYFIN_URL / API_KEY: Required only if TRIGGER_JELLYFIN is set to True.
+2. Setup Script
 
-Toggle,Description
-*DEBUG:  Set to True for verbose logging.
-*TEST_MODE:  Set to True to process only 1 random channel (for testing).
-*SAVE_JSON:  Set to False to prevent raw API data from being saved to your disk.
-*TRIGGER_JELLYFIN:  Set to True to tell Jellyfin to refresh the guide automatically after a run.
+Go to Settings > User Scripts.
+Click Add New Script and name it EPG-Grabber-V3.0.epg
+Paste the contents of the Python script into the editor.
+Update your Schedules Direct credentials in the configuration section:
 
-*** jelly fin trigger will not work on first run, unless you have already mapped the /folder/xml file in the LIVE TV page in Jellyfin.
+Python
+USER_NAME = "your_username"
+PASSWORD_HASH = "your_sha1_password_hash"
 
+3. Schedule
+Set the script to run Daily (typically at 2:00 AM or 3:00 AM) to keep your guide data fresh.
 
-📂 Directory Structure
-After the first run, your output directory will look like this:
-/schedulesdirect/
-├── guide.xml        <-- Point Jellyfin to this file
-└── logos/           <-- Station icons stored here
-    ├── 100147.png
-    └── 20371.jpg
+📂 Output Details
+Default Path: /mnt/user/appdata/schedulesdirect/guide.xml
+Ownership: nobody:users
+Permissions: 777
 
-    Here is a professional and clear README.md tailored for your Schedules Direct to XMLTV script. It explains the features you’ve added (Local Icons, Debug Mode, Test Mode) and provides clear setup instructions for an Unraid environment.
+📺 Connecting to Jellyfin/Emby
+Open your media server dashboard.
+Navigate to Live TV > Tuner Devices.
+Add a new XMLTV Guide Provider.
 
-Schedules Direct to XMLTV for Jellyfin
-A robust Python-based EPG (Electronic Program Guide) generator that fetches data from Schedules Direct and formats it specifically for Jellyfin. This script includes advanced logic to ensure that news programs and daily shows are correctly identified as "Series" to enable full DVR recording capabilities.
+Point the path to: /data/schedulesdirect/guide.xml (mapped via your Docker container settings).
+Refresh guide data. Channels should map automatically based on the 4.1, 4.2 numbering system.
 
-✨ Key Features
-Series Recording Hack: Forces the "Record Series" button in Jellyfin for shows without traditional season/episode numbers (like local news).
+📝 XML Structure Example
+The script produces a rich XML format that includes specific triggers for the recording engine:
 
-Local Icon Hosting: Downloads station logos locally to reduce API calls and speed up guide loading.
+XML
+<programme start="20260103180000 +0000" stop="20260103190000 +0000" channel="4.1">
+    <title>Fox 4 News at 6</title>
+    <category>Series</category>
+    <category>News</category>
+    <episode-num system="xmltv_ns">2025.0103.0</episode-num>
+    <episode-num system="onscreen">S2026E0103</episode-num>
+    <new/>
+</programme>
 
-Intelligent Repeat Logic: Cross-references original air dates to accurately flag "New" vs. "Repeat" episodes.
+🔑 Generating the Password Hash
 
-Unraid Optimized: Includes automatic recursive permission management (chmod 777 and chown nobody:users).
+Schedules Direct requires a SHA1 hash of your password rather than the plain text. To generate your PASSWORD_HASH, run this command in your Unraid terminal:
 
-Test Mode: Option to process only one random channel to verify setup instantly.
+Bash
+echo -n "your_password_here" | sha1sum | awk '{print $1}'
+Copy the resulting 40-character string into the PASSWORD_HASH variable in the script.
 
-Debug Mode: Detailed logging to troubleshoot API responses or file system issues.
+📁 Unraid Folder Mapping
+For the XML to be visible to your Jellyfin or Emby Docker container, ensure your container paths are mapped correctly in the Unraid Docker settings:
 
-🚀 Setup Instructions
-1. Prerequisites
+Container Path	Host Path	Notes
+/data/schedulesdirect	/mnt/user/appdata/schedulesdirect	Set to Read Only for security
 
-A Schedules Direct active subscription.
+🔧 Troubleshooting
+Channels not mapping: Ensure the debug log shows "Virtual Channel" numbers like 4.1 or 5.2. If it shows a 5-digit number (e.g., 19616), check that your Schedules Direct lineup is set to the "Local Broadcast" or "Antenna" version for your zip code.
 
-Python 3.x installed.
+Series recording missing: If the "Record Series" button is missing in Jellyfin, ensure the <category>Series</category> tag is present in the XML. This script forces this for all non-movie programs.
 
-The requests library (pip install requests).
+Permission Denied: If Jellyfin cannot see the file, check the logs of this script to ensure you see: [DEBUG] Permissions set: nobody:users 777.
 
-2. Configuration
-
-Open the script and update the configuration section at the top:
-
-USER_NAME / PASSWORD: Your Schedules Direct credentials.
-
-OUTPUT_DIR: The path where you want the XML and logos stored (e.g., /mnt/user/appdata/schedulesdirect).
-
-JELLYFIN_URL / API_KEY: Required only if TRIGGER_JELLYFIN is set to True.
-
-3. Toggles
-
-Toggle	Description
-DEBUG	Set to True for verbose logging.
-TEST_MODE	Set to True to process only 1 random channel (for testing).
-SAVE_JSON	Set to False to prevent raw API data from being saved to your disk.
-TRIGGER_JELLYFIN	Set to True to tell Jellyfin to refresh the guide automatically after a run.
-📂 Directory Structure
-After the first run, your output directory will look like this:
-
-Plaintext
-/schedulesdirect/
-├── guide.xml        <-- Point Jellyfin to this file
-└── logos/           <-- Station icons stored here
-    ├── 100147.png
-    └── 20371.jpg
-🛠 Integration with Jellyfin
-Navigate to Dashboard > Live TV in Jellyfin.
-
-Add a new XMLTV Tuner.
-
-File Path: Enter the path to your guide.xml (Ensure the path is mapped inside your Jellyfin Docker container).
-
-Refresh Guide Data: Run the manual refresh task. If logos do not appear immediately, ensure your Docker container has a path mapping to the logos/ folder.
-
-🤝 Permissions
-The script is designed to run in an Unraid environment. It automatically executes a recursive chmod 777 and chown nobody:users on the output directory at the end of every run to ensure the Jellyfin Docker container can always read the newly generated files.
-
-📝 License
-MIT License. Feel free to modify and share.
+This script is provided "as-is" for the community. Feel free to fork and modify it for your specific lineup needs.
