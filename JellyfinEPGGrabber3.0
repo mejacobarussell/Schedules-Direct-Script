@@ -5,182 +5,173 @@
 # Author: mrjacobarussell
 # Optimized for: Unraid, Jellyfin, API 20141201
 # ==========================================
-
-import requests
-import hashlib
+#
+#
+#!/usr/bin/python3
 import os
-import time
-import shutil
-import random
+import sys
+import subprocess
 import json
+import datetime
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from xml.dom import minidom
+import pwd
+import grp
 
-# --- Configuration ---
-USER_NAME = 'user'
-PASSWORD = 'password' 
-BASE_URL = 'https://json.schedulesdirect.org/20141201'
-OUTPUT_DIR = "/mnt/user/appdata/schedulesdirect"
-OUTPUT_FILE = f"{OUTPUT_DIR}/guide.xml"
-LOGO_DIR = f"{OUTPUT_DIR}/logos"
-USER_AGENT = "JellyfinEPGGrabber/3.0 (mrjacobarussell)"
+# --- CONFIGURATION ---
+USER_NAME = "yourSchedulkesDirectusername"
+PASSWORD_HASH = "yourhashed password" ## go here enter your password in plane text,then insert into the "Password Hash Field"  https://www.sha1-online.com
+BASE_URL = "https://json.schedulesdirect.org/20141201"
+OUTPUT_DIR = "/mnt/user/appdata/schedulesdirect" # change to what you want, i mapped this folder to jellyfin.
+XML_OUTPUT = os.path.join(OUTPUT_DIR, "guide.xml") #Use what ever file name you want 
+USER_AGENT = "JellyfinEPGGrabberV3.0/Unraid"
+DAYS_TO_FETCH = 14
+VERBOSE = True 
 
-# --- Version 3.0 Toggles ---
-DEBUG = True       # Verbose logging
-TEST_MODE = False  # Process 1 random channel for debugging
-SAVE_JSON = False  # Set to False to disable writing raw .json files to disk
+try:
+    import requests
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
+    import requests
 
-def lprint(text, is_debug=False):
-    if is_debug and not DEBUG: return
-    prefix = "[DEBUG]" if is_debug else "[INFO]"
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {prefix} {text}", flush=True)
+class SchedulesDirectAPI:
+    def __init__(self):
+        self.token = self.get_token()
+    def get_token(self):
+        if VERBOSE: print("[DEBUG] Authenticating...")
+        payload = {"username": USER_NAME, "password": PASSWORD_HASH}
+        r = requests.post(f"{BASE_URL}/token", json=payload, headers={'User-Agent': USER_AGENT})
+        return r.json().get('token')
+    def post_request(self, endpoint, data):
+        headers = {'token': self.token, 'User-Agent': USER_AGENT}
+        r = requests.post(f"{BASE_URL}/{endpoint}", json=data, headers=headers)
+        return r.json()
 
-def apply_permissions(path):
-    """Recursive chmod 777 and chown nobody:users for Unraid compatibility"""
-    lprint(f"Syncing permissions on {path}...", is_debug=True)
+def format_date(sd_date):
+    clean = sd_date.replace("-", "").replace(":", "").replace("T", "").replace("Z", "")
+    return f"{clean[:14]} +0000"
+
+def set_permissions(path):
+    """Applies chown nobody:users and chmod 777 to the file."""
     try:
+        uid = pwd.getpwnam("nobody").pw_uid
+        gid = grp.getgrnam("users").gr_gid
+        os.chown(path, uid, gid)
         os.chmod(path, 0o777)
-        shutil.chown(path, user="nobody", group="users")
-        for root, dirs, files in os.walk(path):
-            for d in dirs:
-                p = os.path.join(root, d)
-                os.chmod(p, 0o777)
-                shutil.chown(p, "nobody", "users")
-            for f in files:
-                p = os.path.join(root, f)
-                os.chmod(p, 0o777)
-                shutil.chown(p, "nobody", "users")
+        if VERBOSE: print(f"[DEBUG] Permissions set: nobody:users 777 for {path}")
     except Exception as e:
-        lprint(f"Permission Sync Warning: {e}")
+        print(f"[ERROR] Could not set permissions: {e}")
 
-def get_token():
-    lprint("V3.0 Auth: Requesting Token...", is_debug=True)
-    pw_hash = hashlib.sha1(PASSWORD.encode('utf-8')).hexdigest()
-    try:
-        res = requests.post(f"{BASE_URL}/token", 
-                            json={"username": USER_NAME, "password": pw_hash},
-                            headers={'User-Agent': USER_AGENT})
-        data = res.json()
-        return data.get('token') if data.get('code') == 0 else None
-    except: return None
+def generate_xml():
+    api = SchedulesDirectAPI()
+    if not api.token: return
 
-def main():
-    lprint(f"--- Launching EPG Grabber V3.0 ---")
-    if TEST_MODE: lprint("!!! RUNNING IN TEST MODE (1 CHANNEL ONLY) !!!")
+    # 1. Get Stations and the specific Lineup Map
+    lineup_resp = requests.get(f"{BASE_URL}/lineups", headers={'token': api.token, 'User-Agent': USER_AGENT}).json()
+    lineup_id = lineup_resp['lineups'][0]['lineup']
+    stations_data = requests.get(f"{BASE_URL}/lineups/{lineup_id}", headers={'token': api.token, 'User-Agent': USER_AGENT}).json()
+    stations = stations_data.get('stations', [])
+    map_data = stations_data.get('map', [])
     
-    os.makedirs(LOGO_DIR, exist_ok=True)
-    token = get_token()
-    if not token: 
-        lprint("Critical Error: Authentication Failed.")
-        return
-    
-    headers = {'token': token, 'User-Agent': USER_AGENT, 'Content-Type': 'application/json'}
+    root = ET.Element("tv", {"generator-info-name": "Custom-Unraid-Grabber-V3"})
 
-    # 1. Lineup & Station Discovery
-    lineups_res = requests.get(f"{BASE_URL}/lineups", headers=headers).json()
-    master_stations_map = {}
-    for entry in lineups_res.get('lineups', []):
-        l_id = entry['lineup']
-        m_res = requests.get(f"{BASE_URL}/lineups/{l_id}", headers=headers).json()
-        map_lookup = {m['stationID']: (f"{m['atscMajor']}.{m['atscMinor']}" if 'atscMajor' in m else m.get('channel')) for m in m_res.get('map', [])}
-        for s in m_res.get('stations', []):
-            sid = s['stationID']
-            s['display_number'] = map_lookup.get(sid, '')
-            master_stations_map[sid] = s
+    id_map = {}
+    station_ids = []
 
-    # Test Mode Filter
-    station_ids = list(master_stations_map.keys())
-    if TEST_MODE and station_ids:
-        random_sid = random.choice(station_ids)
-        lprint(f"Test Mode Target: {master_stations_map[random_sid].get('callsign')}")
-        station_ids = [random_sid]
-        master_stations_map = {random_sid: master_stations_map[random_sid]}
+    # Build a lookup for virtual channel numbers (ATSC Major.Minor)
+    channel_lookup = {}
+    for entry in map_data:
+        sid = entry.get('stationID')
+        if 'atscMajor' in entry and 'atscMinor' in entry:
+            channel_lookup[sid] = f"{entry['atscMajor']}.{entry['atscMinor']}"
+        elif 'channel' in entry:
+            channel_lookup[sid] = entry['channel'].replace('_', '.')
 
-    # 2. Schedule Acquisition (Batching 500)
-    schedules_raw = []
-    lprint(f"Syncing schedules for {len(station_ids)} stations...")
-    for i in range(0, len(station_ids), 500):
-        batch = [{"stationID": sid} for sid in station_ids[i:i+500]]
-        sched_res = requests.post(f"{BASE_URL}/schedules", headers=headers, json=batch)
-        if sched_res.status_code == 200:
-            schedules_raw.extend(sched_res.json())
-
-    # 3. Metadata Acquisition (Batching 5000, Full 14-char IDs)
-    all_prog_ids = list(set(p['programID'] for s in schedules_raw for p in s.get('programs', [])))
-    programs_data = {}
-    lprint(f"Syncing metadata for {len(all_prog_ids)} unique programs...")
-    for i in range(0, len(all_prog_ids), 5000):
-        batch = all_prog_ids[i:i+5000]
-        prog_res = requests.post(f"{BASE_URL}/programs", headers=headers, json=batch)
-        if prog_res.status_code == 200:
-            for p in prog_res.json():
-                programs_data[p['programID']] = p
-
-    # 4. XMLTV Construction
-    lprint("Constructing Version 3.0 XMLTV File...")
-    root = ET.Element("tv", {"generator-info-name": "Jellyfin-v3.0-Stable"})
-    
-    # Process Channels & Icons
-    for s_id, s_info in master_stations_map.items():
-        ch = ET.SubElement(root, "channel", id=s_id)
-        ET.SubElement(ch, "display-name").text = s_info.get('callsign', '')
-        if s_info.get('display_number'):
-            ET.SubElement(ch, "display-name").text = str(s_info['display_number'])
+    for s in stations:
+        sd_id = s['stationID']
+        station_ids.append(sd_id)
         
-        if 'logo' in s_info:
-            local_path = os.path.join(LOGO_DIR, f"{s_id}.png")
-            if not os.path.exists(local_path):
-                try:
-                    img = requests.get(s_info['logo']['URL'], headers={'User-Agent': USER_AGENT}).content
-                    with open(local_path, 'wb') as f: f.write(img)
-                except: pass
-            ET.SubElement(ch, "icon", src=local_path)
+        display_number = channel_lookup.get(sd_id, s.get('channel', sd_id)).replace('_', '.')
+        id_map[sd_id] = display_number
+        
+        if VERBOSE: print(f"[DEBUG] Mapping Station {sd_id} ({s.get('callsign')}) to Virtual Channel {display_number}")
+        
+        channel_node = ET.SubElement(root, "channel", id=display_number)
+        ET.SubElement(channel_node, "display-name").text = display_number
+        ET.SubElement(channel_node, "display-name").text = s.get('callsign', sd_id)
 
-    today = datetime.now().date()
-    
-    # Process Programs
-    for s_map in schedules_raw:
-        for p in s_map.get('programs', []):
-            prog_id = p['programID']
-            details = programs_data.get(prog_id, {})
+    # 2. Fetch Schedule
+    today = datetime.date.today()
+    dates = [(today + datetime.timedelta(days=x)).isoformat() for x in range(DAYS_TO_FETCH)]
+    batch_query = [{"stationID": sid, "date": dates} for sid in station_ids]
+    schedules = api.post_request("schedules", batch_query)
+
+    # 3. Fetch Metadata
+    unique_prog_ids = {p['programID'] for sched in schedules for p in sched.get('programs', [])}
+    meta_cache = {}
+    prog_list = list(unique_prog_ids)
+    for i in range(0, len(prog_list), 5000):
+        chunk = prog_list[i:i + 5000]
+        meta_response = api.post_request("programs", chunk)
+        if isinstance(meta_response, list):
+            for m in meta_response:
+                meta_cache[m['programID']] = m
+
+    # 4. Build Programmes
+    for sched in schedules:
+        current_sid = sched['stationID']
+        xml_chan_id = id_map.get(current_sid)
+        
+        for prog in sched.get('programs', []):
+            p_id = prog['programID']
+            meta = meta_cache.get(p_id, {})
+            start_dt = datetime.datetime.strptime(prog['airDateTime'].replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+            end_dt = start_dt + datetime.timedelta(seconds=prog['duration'])
             
-            # Timestamp Logic
-            start_iso = p['airDateTime'].replace("Z","").split(".")[0]
-            start_dt = datetime.strptime(start_iso, "%Y-%m-%dT%H:%M:%S")
-            stop_dt = start_dt + timedelta(seconds=p.get('duration', 0))
+            p_node = ET.SubElement(root, "programme", 
+                                    start=format_date(prog['airDateTime']), 
+                                    stop=format_date(end_dt.isoformat()), 
+                                    channel=xml_chan_id)
+
+            title = meta.get('titles', [{}])[0].get('title120', "To Be Announced")
+            ET.SubElement(p_node, "title").text = title
             
-            prog = ET.SubElement(root, "programme", 
-                                 start=start_dt.strftime("%Y%m%d%H%M%S +0000"), 
-                                 stop=stop_dt.strftime("%Y%m%d%H%M%S +0000"),
-                                 channel=s_map['stationID'])
-            
-            # Advanced New/Repeat Logic
-            oad_str = details.get('originalAirDate', '')
-            is_new = p.get('new') or oad_str == today.strftime("%Y-%m-%d")
-            
-            if is_new:
-                ET.SubElement(prog, "new")
+            if not p_id.startswith("MV"):
+                ET.SubElement(p_node, "category").text = "Series"
+                ET.SubElement(p_node, "category").text = "tvshow"
+            if "News" in title:
+                ET.SubElement(p_node, "category").text = "News"
+
+            # Episode Logic
+            air_dt = datetime.datetime.strptime(prog['airDateTime'][:10], "%Y-%m-%d")
+            if p_id.startswith("EP"):
+                s_num = int(p_id[2:6])
+                e_num = int(p_id[6:10])
+                ET.SubElement(p_node, "episode-num", system="xmltv_ns").text = f"{s_num-1}.{e_num-1}.0"
+                ET.SubElement(p_node, "episode-num", system="onscreen").text = f"S{s_num:02d}E{e_num:02d}"
             else:
-                ET.SubElement(prog, "previously-shown", start=oad_str.replace("-",""))
+                year = air_dt.year
+                month_day = int(air_dt.strftime('%m%d'))
+                ET.SubElement(p_node, "episode-num", system="xmltv_ns").text = f"{year-1}.{month_day-1}.0"
+                ET.SubElement(p_node, "episode-num", system="onscreen").text = f"S{year}E{air_dt.strftime('%m%d')}"
 
-            # Metadata & Series Recording Support
-            ET.SubElement(prog, "title").text = details.get('titles', [{}])[0].get('title120', 'No Title')
-            
-            if prog_id.startswith("SH"):
-                # The 'Magic String' for Jellyfin Series DVR support
-                ET.SubElement(prog, "episode-num", system="xmltv_ns").text = ". ."
-            
-            ET.SubElement(prog, "series-id", system="gracenote").text = prog_id[:10]
-            
-            for g in details.get('genres', []):
-                ET.SubElement(prog, "category").text = g
+            if "News" in title or prog.get('new'):
+                ET.SubElement(p_node, "new")
+            else:
+                ET.SubElement(p_node, "previously-shown")
 
-    # 5. Export & Permission Cleanup
-    tree = ET.ElementTree(root)
-    with open(OUTPUT_FILE, "wb") as f: tree.write(f, encoding='utf-8', xml_declaration=True)
+    # 5. Save and Set Permissions
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+        set_permissions(OUTPUT_DIR)
+
+    xml_data = ET.tostring(root, encoding='utf-8')
+    reparsed = minidom.parseString(xml_data)
+    with open(XML_OUTPUT, "w", encoding="utf-8") as f:
+        f.write(reparsed.toprettyxml(indent="  "))
     
-    apply_permissions(OUTPUT_DIR)
-    lprint(f"--- V3.0 SUCCESS: {OUTPUT_FILE} ---")
+    set_permissions(XML_OUTPUT)
+    if VERBOSE: print(f"[INFO] Done. XML created at {XML_OUTPUT}")
 
 if __name__ == "__main__":
-    main()
+    generate_xml()
