@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+# Version 3.2.0 - Base Script with Logo & Pathing Fixes
+
 import os
 import sys
 import subprocess
@@ -10,13 +12,18 @@ import pwd
 import grp
 
 # --- CONFIGURATION ---
-USER_NAME = "user"
-PASSWORD_HASH = "hashpass" 
+USER_NAME = "username"
+PASSWORD_HASH = "hash password" 
 BASE_URL = "https://json.schedulesdirect.org/20141201"
 OUTPUT_DIR = "/mnt/user/appdata/schedulesdirect"
+LOGO_DIR = os.path.join(OUTPUT_DIR, "logos")
 XML_OUTPUT = os.path.join(OUTPUT_DIR, "guide.xml")
-USER_AGENT = "EPG-Grabber-V3.0/Unraid"
-DAYS_TO_FETCH = 2 
+
+# The path Jellyfin sees inside its container
+JELLYFIN_LOGOS_PATH = "/xmltv/logos"
+
+USER_AGENT = "JellyfinEPGGrabberV3.2.0/Unraid"
+DAYS_TO_FETCH = 7 
 VERBOSE = True 
 
 try:
@@ -27,15 +34,20 @@ except ImportError:
 
 class SchedulesDirectAPI:
     def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({'User-Agent': USER_AGENT})
         self.token = self.get_token()
+        if self.token:
+            self.session.headers.update({'token': self.token})
+
     def get_token(self):
         if VERBOSE: print("[DEBUG] Authenticating...")
         payload = {"username": USER_NAME, "password": PASSWORD_HASH}
-        r = requests.post(f"{BASE_URL}/token", json=payload, headers={'User-Agent': USER_AGENT})
+        r = self.session.post(f"{BASE_URL}/token", json=payload)
         return r.json().get('token')
+
     def post_request(self, endpoint, data):
-        headers = {'token': self.token, 'User-Agent': USER_AGENT}
-        r = requests.post(f"{BASE_URL}/{endpoint}", json=data, headers=headers)
+        r = self.session.post(f"{BASE_URL}/{endpoint}", json=data)
         return r.json()
 
 def format_date(sd_date):
@@ -55,12 +67,19 @@ def set_permissions(path):
 
 def generate_xml():
     api = SchedulesDirectAPI()
-    if not api.token: return
+    if not api.token: 
+        print("[ERROR] Failed to obtain API token.")
+        return
+
+    # Ensure directories exist
+    os.makedirs(LOGO_DIR, exist_ok=True)
+    set_permissions(OUTPUT_DIR)
+    set_permissions(LOGO_DIR)
 
     # 1. Get Stations and the specific Lineup Map
-    lineup_resp = requests.get(f"{BASE_URL}/lineups", headers={'token': api.token, 'User-Agent': USER_AGENT}).json()
+    lineup_resp = api.session.get(f"{BASE_URL}/lineups").json()
     lineup_id = lineup_resp['lineups'][0]['lineup']
-    stations_data = requests.get(f"{BASE_URL}/lineups/{lineup_id}", headers={'token': api.token, 'User-Agent': USER_AGENT}).json()
+    stations_data = api.session.get(f"{BASE_URL}/lineups/{lineup_id}").json()
     stations = stations_data.get('stations', [])
     map_data = stations_data.get('map', [])
     
@@ -84,12 +103,36 @@ def generate_xml():
         
         display_number = channel_lookup.get(sd_id, s.get('channel', sd_id)).replace('_', '.')
         id_map[sd_id] = display_number
+        callsign = s.get('callsign', sd_id)
         
-        if VERBOSE: print(f"[DEBUG] Mapping Station {sd_id} ({s.get('callsign')}) to Virtual Channel {display_number}")
+        if VERBOSE: print(f"[DEBUG] Mapping Station {sd_id} ({callsign}) to Virtual Channel {display_number}")
         
         channel_node = ET.SubElement(root, "channel", id=display_number)
         ET.SubElement(channel_node, "display-name").text = display_number
-        ET.SubElement(channel_node, "display-name").text = s.get('callsign', sd_id)
+        ET.SubElement(channel_node, "display-name").text = callsign
+
+        # --- LOGO DOWNLOAD LOGIC ---
+        logo_url = None
+        if s.get('stationLogo') and len(s['stationLogo']) > 0:
+            logo_url = s['stationLogo'][0].get('URL')
+        elif s.get('logo'):
+            logo_url = s['logo'].get('URL')
+
+        if logo_url:
+            logo_filename = f"{sd_id}.png"
+            local_logo_path = os.path.join(LOGO_DIR, logo_filename)
+            if not os.path.exists(local_logo_path):
+                try:
+                    if logo_url.startswith('/'): logo_url = f"https://json.schedulesdirect.org{logo_url}"
+                    img_data = api.session.get(logo_url, timeout=10)
+                    if img_data.status_code == 200:
+                        with open(local_logo_path, 'wb') as f:
+                            f.write(img_data.content)
+                        set_permissions(local_logo_path)
+                except: pass
+            
+            # Point XML to Jellyfin internal path
+            ET.SubElement(channel_node, "icon", src=f"{JELLYFIN_LOGOS_PATH}/{logo_filename}")
 
     # 2. Fetch Schedule
     today = datetime.date.today()
@@ -151,11 +194,7 @@ def generate_xml():
             else:
                 ET.SubElement(p_node, "previously-shown")
 
-    # 5. Save and Set Permissions
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-        set_permissions(OUTPUT_DIR)
-
+    # 5. Final Save
     xml_data = ET.tostring(root, encoding='utf-8')
     reparsed = minidom.parseString(xml_data)
     with open(XML_OUTPUT, "w", encoding="utf-8") as f:
