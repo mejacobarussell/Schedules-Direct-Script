@@ -10,15 +10,13 @@ import pwd
 import grp
 
 # --- CONFIGURATION ---
-USER_NAME = "username"
-PASSWORD_HASH = "hashed password" 
+USER_NAME = "user"
+PASSWORD_HASH = "hashpass" 
 BASE_URL = "https://json.schedulesdirect.org/20141201"
 OUTPUT_DIR = "/mnt/user/appdata/schedulesdirect"
 XML_OUTPUT = os.path.join(OUTPUT_DIR, "guide.xml")
-USER_AGENT = "JellyfinEPGGrabberV3.0/Unraid"
-#by mejacobarussell 
-#downloaded from https://github.com/mejacobarussell/Schedules-Direct-Script/edit/main/JellyfinEPGGrabber3.0.py
-DAYS_TO_FETCH = 7 # Increased to 7 days
+USER_AGENT = "EPG-Grabber-V3.0/Unraid"
+DAYS_TO_FETCH = 2 
 VERBOSE = True 
 
 try:
@@ -31,7 +29,7 @@ class SchedulesDirectAPI:
     def __init__(self):
         self.token = self.get_token()
     def get_token(self):
-        if VERBOSE: print(f"[DEBUG] Authenticating as {USER_AGENT}...")
+        if VERBOSE: print("[DEBUG] Authenticating...")
         payload = {"username": USER_NAME, "password": PASSWORD_HASH}
         r = requests.post(f"{BASE_URL}/token", json=payload, headers={'User-Agent': USER_AGENT})
         return r.json().get('token')
@@ -45,32 +43,33 @@ def format_date(sd_date):
     return f"{clean[:14]} +0000"
 
 def set_permissions(path):
-    """Applies chown nobody:users and chmod 777."""
+    """Applies chown nobody:users and chmod 777 to the file."""
     try:
         uid = pwd.getpwnam("nobody").pw_uid
         gid = grp.getgrnam("users").gr_gid
         os.chown(path, uid, gid)
         os.chmod(path, 0o777)
+        if VERBOSE: print(f"[DEBUG] Permissions set: nobody:users 777 for {path}")
     except Exception as e:
-        print(f"[ERROR] Permissions failed: {e}")
+        print(f"[ERROR] Could not set permissions: {e}")
 
 def generate_xml():
     api = SchedulesDirectAPI()
     if not api.token: return
 
-    # 1. Get Stations & Lineup Map
+    # 1. Get Stations and the specific Lineup Map
     lineup_resp = requests.get(f"{BASE_URL}/lineups", headers={'token': api.token, 'User-Agent': USER_AGENT}).json()
     lineup_id = lineup_resp['lineups'][0]['lineup']
     stations_data = requests.get(f"{BASE_URL}/lineups/{lineup_id}", headers={'token': api.token, 'User-Agent': USER_AGENT}).json()
     stations = stations_data.get('stations', [])
     map_data = stations_data.get('map', [])
     
-    root = ET.Element("tv", {"generator-info-name": USER_AGENT})
+    root = ET.Element("tv", {"generator-info-name": "Custom-Unraid-Grabber-V3"})
 
     id_map = {}
     station_ids = []
 
-    # Build lookup for ATSC Major.Minor
+    # Build a lookup for virtual channel numbers (ATSC Major.Minor)
     channel_lookup = {}
     for entry in map_data:
         sid = entry.get('stationID')
@@ -86,18 +85,13 @@ def generate_xml():
         display_number = channel_lookup.get(sd_id, s.get('channel', sd_id)).replace('_', '.')
         id_map[sd_id] = display_number
         
+        if VERBOSE: print(f"[DEBUG] Mapping Station {sd_id} ({s.get('callsign')}) to Virtual Channel {display_number}")
+        
         channel_node = ET.SubElement(root, "channel", id=display_number)
         ET.SubElement(channel_node, "display-name").text = display_number
         ET.SubElement(channel_node, "display-name").text = s.get('callsign', sd_id)
-        
-        # Pull Icon from SD
-        if 'stationLogos' in s and len(s['stationLogos']) > 0:
-            logo_url = s['stationLogos'][0].get('URL')
-            if logo_url:
-                ET.SubElement(channel_node, "icon", src=logo_url)
 
-    # 2. Fetch Schedule (Iterative for 7 days)
-    if VERBOSE: print(f"[DEBUG] Fetching {DAYS_TO_FETCH} days of data...")
+    # 2. Fetch Schedule
     today = datetime.date.today()
     dates = [(today + datetime.timedelta(days=x)).isoformat() for x in range(DAYS_TO_FETCH)]
     batch_query = [{"stationID": sid, "date": dates} for sid in station_ids]
@@ -157,7 +151,7 @@ def generate_xml():
             else:
                 ET.SubElement(p_node, "previously-shown")
 
-    # 5. Save
+    # 5. Save and Set Permissions
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
         set_permissions(OUTPUT_DIR)
@@ -168,7 +162,7 @@ def generate_xml():
         f.write(reparsed.toprettyxml(indent="  "))
     
     set_permissions(XML_OUTPUT)
-    if VERBOSE: print(f"[INFO] Success. {DAYS_TO_FETCH} days generated at {XML_OUTPUT}")
+    if VERBOSE: print(f"[INFO] Done. XML created at {XML_OUTPUT}")
 
 if __name__ == "__main__":
     generate_xml()
