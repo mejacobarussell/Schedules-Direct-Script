@@ -25,7 +25,7 @@ BASE_URL = "https://json.schedulesdirect.org/20141201"
 OUTPUT_DIR = "/mnt/user/appdata/schedulesdirect" # change to what you want, i mapped this folder to jellyfin.
 XML_OUTPUT = os.path.join(OUTPUT_DIR, "guide.xml") #Use what ever file name you want 
 USER_AGENT = "JellyfinEPGGrabberV3.0/Unraid"
-DAYS_TO_FETCH = 14
+DAYS_TO_FETCH = 7 # recomend 2 days for testing and 7 for regular use, can go upto 14 days. 
 VERBOSE = True 
 
 try:
