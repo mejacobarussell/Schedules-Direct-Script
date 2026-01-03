@@ -23,6 +23,8 @@ Unraid Permission Friendly: Automatically sets file ownership to nobody:users an
 
 Intelligent "New" Flagging: Specifically identifies News programs to ensure they are marked as "New," preventing the DVR from skipping them as "Repeats."
 
+LOCAL HOSTING OF CHANNEL ICONS AND COMING SOON TV SHOW PICTURES.
+
 🛠️ Installation on Unraid
 1. Requirements
 
