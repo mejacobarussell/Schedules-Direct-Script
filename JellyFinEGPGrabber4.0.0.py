@@ -4,7 +4,7 @@
 #!/usr/bin/python3
 """
 Schedules Direct & TVDB Grabber for Unraid/Jellyfin
-Author: mrjacobarussell / Gemini AI
+Author: mrjacobarussell 
 Location: /mnt/user/appdata/schedulesdirect/
 
 CHANGE LOG:
