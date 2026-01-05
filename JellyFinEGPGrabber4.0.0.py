@@ -21,10 +21,10 @@ import os, sys, subprocess, json, datetime, time, logging
 import xml.etree.ElementTree as ET
 
 # --- CONFIGURATION ---
-USER_NAME = "mrjacobarussell"
-PASSWORD_HASH = "e06e6df873d3fcc0e7fd33a2246da96a93c1fbb4" 
-TVDB_API_KEY = "4c371140-719b-44ce-9eff-0448c098b623"
-TVDB_PIN = "695C18D5D4F1D6.34161382" 
+USER_NAME = "user"
+PASSWORD_HASH = "haspassword" 
+TVDB_API_KEY = "api"
+TVDB_PIN = "pin" 
 
 OUTPUT_DIR = "/mnt/user/appdata/schedulesdirect"
 XML_OUTPUT = os.path.join(OUTPUT_DIR, "guide.xml")
