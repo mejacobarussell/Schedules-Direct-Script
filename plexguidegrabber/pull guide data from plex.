@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+
+import sqlite3
+import shutil
+import os
+import re
+import xml.etree.ElementTree as ET
+from datetime import datetime
+
+# ================= ADJUSTABLE FIELDS =================
+PLEX_DB_PATH = r"/mnt/user/appdata/Plex-Media-Server/Library/Application Support/Plex Media Server/Plug-in Support/Databases/tv.plex.providers.epg.cloud-729b9c07-3c68-4ac0-b803-d228ee6b59c1.db"
+OUTPUT_XML = "/mnt/user/appdata/schedulesdirect/plex_guide.xml"
+TEMP_DIR = "/mnt/user/appdata/schedulesdirect/plex_EPG/"
+# =====================================================
+
+def create_xmltv():
+    # 1. Safety: Copy database files to avoid "database is locked" errors
+    if not os.path.exists(TEMP_DIR):
+        os.makedirs(TEMP_DIR)
+    
+    db_name = os.path.basename(PLEX_DB_PATH)
+    temp_db = os.path.join(TEMP_DIR, db_name)
+    
+    print(f"--- File Operations ---")
+    print(f"Copying database to {temp_db}...")
+    try:
+        shutil.copy2(PLEX_DB_PATH, temp_db)
+        for suffix in ["-shm", "-wal"]:
+            if os.path.exists(PLEX_DB_PATH + suffix):
+                shutil.copy2(PLEX_DB_PATH + suffix, temp_db + suffix)
+    except FileNotFoundError:
+        print(f"Error: Plex DB not found at: {PLEX_DB_PATH}")
+        return
+
+    # 2. Connect to the copied database
+    conn = sqlite3.connect(temp_db)
+    cursor = conn.cursor()
+
+    # 3. Define the XMLTV structure
+    root = ET.Element("tv", {"generator-info-name": "PlexToJellyfin-Python"})
+
+    # 4. The SQL Query
+    # Wrapped "index" in double quotes to prevent SQLite syntax errors
+    query = """
+    SELECT 
+        tv.tag AS channel_name,
+        tv.id AS channel_id,
+        show.title AS show_title,
+        episode.title AS ep_title,
+        episode.summary AS description,
+        items.begins_at AS start_unix,
+        items.ends_at AS end_unix,
+        show.content_rating AS rating,
+        season."index" AS season_num,
+        episode."index" AS episode_num,
+        tv.user_thumb_url AS logo_url
+    FROM metadata_items AS show
+    JOIN metadata_items AS season ON show.id = season.parent_id
+    JOIN metadata_items AS episode ON season.id = episode.parent_id
+    JOIN media_items AS items ON episode.id = items.metadata_item_id
+    JOIN tags AS tv ON items.channel_id = tv.id
+    ORDER BY items.begins_at;
+    """
+
+    print("\n--- Processing ---")
+    print("Querying database...")
+    cursor.execute(query)
+    rows = cursor.fetchall()
+
+    if not rows:
+        print("Warning: No program data found. Check if Plex EPG is currently populated.")
+        return
+
+    # 5. Extract Unique Channels and Create ID Map
+    # Maps internal Plex ID to a Display ID (like 21.1) for Jellyfin auto-mapping
+    channel_map = {}
+    for row in rows:
+        full_name, plex_id, logo = row[0], row[1], row[10]
+        if plex_id not in channel_map:
+            # Look for a number like 21.1 or 4 at the start of the name
+            match = re.match(r'^(\d+\.\d+|\d+)', full_name)
+            display_id = match.group(1) if match else str(plex_id)
+            channel_map[plex_id] = {"name": full_name, "logo": logo, "display_id": display_id}
+
+    # Add Channels to XML
+    for p_id, info in channel_map.items():
+        channel_node = ET.SubElement(root, "channel", id=info['display_id'])
+        ET.SubElement(channel_node, "display-name").text = info['name']
+        if info['logo']:
+            ET.SubElement(channel_node, "icon", src=info['logo'])
+
+    # 6. Process Programs
+    print(f"Processing {len(rows)} programs...")
+    for row in rows:
+        full_name, plex_id, s_title, e_title, desc, start, end, rating, s_num, e_num, _ = row
+        
+        display_id = channel_map[plex_id]['display_id']
+        
+        # Convert Unix to XMLTV Format
+        start_ts = datetime.fromtimestamp(start).strftime('%Y%m%d%H%M%S +0000')
+        end_ts = datetime.fromtimestamp(end).strftime('%Y%m%d%H%M%S +0000')
+
+        prog_node = ET.SubElement(root, "programme", {
+            "start": start_ts, 
+            "stop": end_ts, 
+            "channel": display_id
+        })
+        
+        ET.SubElement(prog_node, "title", lang="en").text = s_title
+        if e_title and e_title != s_title:
+            ET.SubElement(prog_node, "sub-title", lang="en").text = e_title
+        
+        ET.SubElement(prog_node, "desc", lang="en").text = desc if desc else ""
+        
+        if rating:
+            r_node = ET.SubElement(prog_node, "rating", system="VCHIP")
+            ET.SubElement(r_node, "value").text = rating
+
+        # Season/Episode Fix: Ensure no negative numbers for Jellyfin
+        if s_num is not None and e_num is not None:
+            xml_s = max(0, s_num - 1)
+            xml_e = max(0, e_num - 1)
+            ns_val = f"{xml_s}.{xml_e}.0"
+            ET.SubElement(prog_node, "episode-num", system="xmltv_ns").text = ns_val
+
+    # 7. Write to File
+    tree = ET.ElementTree(root)
+    if hasattr(ET, 'indent'): 
+        ET.indent(tree, space="  ", level=0)
+    tree.write(OUTPUT_XML, encoding="utf-8", xml_declaration=True)
+
+    conn.close()
+    print(f"\nSuccess! XMLTV file created: {OUTPUT_XML}")
+    print(f"Mapped {len(channel_map)} channels. If guide is empty, check Channel Mapping in Jellyfin.")
+
+if __name__ == "__main__":
+    create_xmltv()
