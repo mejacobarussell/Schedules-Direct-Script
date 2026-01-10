@@ -1,4 +1,4 @@
-I have had tons of issues getting locas to show new or repeat.
+I have had tons of issues getting locals to show new or repeat.
 I have created a new script that pull the data from your plex server! Unfortunatly it only pulls 7 days.
 I am going to use the guide data from plex, to figure out where my issues are at in the guide data from schedules direct and how to fix it.
 
