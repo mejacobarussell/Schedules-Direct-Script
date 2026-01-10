@@ -2,7 +2,8 @@ I have had tons of issues getting locas to show new or repeat.
 I have created a new script that pull the data from your plex server! Unfortunatly it only pulls 7 days.
 I am going to use the guide data from plex, to figure out where my issues are at in the guide data from schedules direct and how to fix it.
 
-Until then if you have an issue try the plex grabber script
+Until then if you have an issue and have Plex serial with jellyfin,  try the plex grabber script
+https://github.com/mejacobarussell/Schedules-Direct-Script/tree/main/plexguidegrabber
 
 With JellyFin being broken when working with schedulesdirect.com, I tried dockers and all sorts of stuff, but running a nextPVR docker just for guide data didnt make sense to me. I created this script over a week with what free time I had.
 
