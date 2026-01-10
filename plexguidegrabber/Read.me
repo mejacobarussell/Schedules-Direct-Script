@@ -1,0 +1,65 @@
+This README is designed to help you (or anyone else) understand how the script works and how to troubleshoot the guide if the times or mappings ever drift in the future.
+Plex-to-Jellyfin EPG Sync
+
+This script extracts Electronic Program Guide (EPG) data from a Plex Media Server database and converts it into a standard XMLTV file format compatible with Jellyfin. It specifically addresses common issues like timezone offsets, future-dated cache entries, and channel auto-mapping.
+📁 File Structure
+
+    Source: .../Databases/tv.plex.providers.epg.cloud-xxx.db (Plex's EPG Cache)
+
+    Output: .../schedulesdirect/plex_guide.xml (The file Jellyfin reads)
+
+    Temp: .../schedulesdirect/plex_EPG/ (Used for safe database copying)
+
+⚙️ Configuration Variables
+
+The following variables are located at the top of the script for easy adjustment:
+Variable,Purpose
+-TIMEZONE_OFFSET,"Sets your local time difference from UTC. Use ""-0600"" for Central Standard Time. If the guide is 1 hour off, change this to ""-0500"" or ""-0700""."
+-PLEX_DB_PATH,The absolute path to your Plex EPG database. This file contains the raw program airtimes.
+-OUTPUT_XML,The destination path where the .xml file will be created. Point Jellyfin to this path.
+-TEMP_DIR,"A workspace folder. The script copies the Plex DB here before reading to avoid ""Database is Locked"" errors."
+
+🛠 Features
+
+    Auto-Time Correction: If Plex has pre-cached data for the future (e.g., data starting 12 days from now), the script automatically detects the gap and shifts the programs to start at the current time.
+    Channel Mapping: The script extracts the channel number (like 8.2) from the Plex channel tag and sets it as the XML ID. This allows Jellyfin to automatically link the guide data to your physical tuner channels.
+    Episode Formatting: Converts Plex's internal numbering into xmltv_ns (e.g., S01E05 becomes 0.4.0), ensuring Jellyfin displays season and episode info correctly.
+    VCHIP Ratings: Properly formats content ratings (TV-PG, TV-MA) so parental control icons appear in the Jellyfin interface.
+
+🚀 How to Use
+
+    Run the Script: Run the Python script via terminal or a scheduled task (Cron/User Scripts).
+python3 plex_to_xmltv.py
+
+  OR
+--PERFERED--
+Userscripts in UnRaid
+    
+    Create the Script
+    Go to Settings > User Scripts.
+    Click Add New Script at the bottom.
+    Name it something like Plex_to_Jellyfin_EPG.
+    Hover over the new script and click the Gear Icon (or click the script name) and select Edit Script.
+    Delete any existing text and paste the complete Python script provided earlier.
+
+    Click Save Changes.
+
+--. Set the Schedule
+To keep your guide fresh, you should run this script automatically once or twice a day.
+    In the User Scripts list, find your script.
+    Change the dropdown that says Manual to Daily (or Custom if you want to use a specific Cron schedule like 0 4 * * * to run at 4:00 AM).
+    Click Apply.
+
+Configure Jellyfin:
+
+        Go to Dashboard > Live TV.
+        Add a new XMLTV Guide Provider.
+        Set the path to match your OUTPUT_XML variable.
+
+    Refresh: Click Refresh Guide Data in Jellyfin.
+
+❓ Troubleshooting
+
+    Guide is empty: Ensure the system time on your Unraid/Server is correct and that the TIMEZONE_OFFSET matches your location.
+    Channels not mapping: In Jellyfin, go to Dashboard > Live TV > Tuner Devices and click Channel Mapping. Ensure the names in the XML match the names your tuner sees.
+    Database is Locked: The script handles this by creating a copy, but ensure Plex has read/write permissions to the TEMP_DIR.
